@@ -4,13 +4,13 @@ const rp = require('request-promise');
 var fs = require('fs');
 
 
-var githubUser = "<<USER_NAME>>"  // github user name
-var password = "<<YOUR_PERSONAL_ACCESS_TOKEN_HERE>>"  // personal access token with repos permission
-var fromDate = '2017-07-01'  //yyyy-mm-dd
+var githubUser = "<<GITHUB_USERNAME>>"  // github user name
+var password = "<<PERSONAL_ACCESS_TOKEN>>"  // personal access token with repos permission
+var fromDate = '2017-08-06'  //yyyy-mm-dd
 const auth = 'Basic ' + new Buffer(githubUser + ':' + password).toString('base64');
 
 rp({
-    uri: 'https://api.github.com/users/' + githubUser + '/repos',
+    uri: 'https://api.github.com/user/repos',
     headers: {
         'User-Agent': 'Request-Promise',
         'Authorization': auth
@@ -20,61 +20,89 @@ rp({
 .then(function(response) {
 
     let repos = JSON.parse(response.body);
-    // console.log(repos);
+    console.log(repos.length + " repos found");
 
     // loop through json to get the commits url
     let allCommitsRequests = [];
+	let allBranshesRequests = [];
 
-    repos.forEach(function(repo) {
-        let commits_url = repo.commits_url.replace(/{\/sha}/,"");
-        let req = rp({
-          uri : commits_url + '?author=' + githubUser + '&since=' + fromDate,
+	// get all branches list
+	repos.forEach(function(repo) {
+		let branches_url = repo.branches_url.replace(/{\/branch}/,"");
+		let req = rp({
+          uri : branches_url,
           headers: {
               'User-Agent': 'Request-Promise',
               'Authorization': auth
           },
           resolveWithFullResponse: true
         });
+		
+		allBranshesRequests.push(req);
+	});
+	
+	// loop through branch results to create commit requests
+	Promise.all(allBranshesRequests).then(function(results) {
+		
+		// loop repos and generate urls for all branches
+		repos.forEach(function(repo,index) {
+			
+			let result = JSON.parse(results[index].body);
+			result.forEach(function(branch) {
+				let commits_url = repo.commits_url.replace(/{\/sha}/,"");
+				commits_url += '?sha=' + branch.name; // https://stackoverflow.com/a/16782303
+				let req = rp({
+				  uri : commits_url + '&?author=' + githubUser + '&since=' + fromDate,
+				  headers: {
+					  'User-Agent': 'Request-Promise',
+					  'Authorization': auth
+				  },
+				  resolveWithFullResponse: true
+				});
 
-        allCommitsRequests.push(req);
-    });
+				allCommitsRequests.push(req);
+			});
+		});
 
-    Promise.all(allCommitsRequests).then(function(results) {
+		// we have the results
+		Promise.all(allCommitsRequests).then(function(results) {
 
-        let outputs = [];
-        results.forEach(function(result,index) {
-            // console.log(result.body);
+			let outputs = [];
+			results.forEach(function(result,index) {
+				// console.log(result.body);
 
-            var commits = JSON.parse(result.body);
+				var commits = JSON.parse(result.body);
+				console.log(commits.length + " commits");
+				
+				if (commits.length > 0) {
+					var output = {};
+					output.name = repos[index].name;
+					output.commits = {};
+					commits.forEach( commit => {
+						// console.log(commit);
+						var date = commit.commit.author.date.substring(0,10);
 
-            if (commits.length > 0) {
-                var output = {};
-                output.name = repos[index].name;
-                output.commits = {};
-                commits.forEach( commit => {
-                    // console.log(commit);
-                    var date = commit.commit.author.date.substring(0,10);
+						// init array if empty
+						if (output.commits[date] == null)
+							output.commits[date] = []
 
-                    // init array if empty
-                    if (output.commits[date] == null)
-                        output.commits[date] = []
+						output.commits[date].push(commit.commit.message);
+					})
 
-                    output.commits[date].push(commit.commit.message);
-                })
+					outputs.push(output);
+				}
+			})
 
-                outputs.push(output);
-            }
-        })
+			printOutput(outputs)
 
-        printOutput(outputs)
-
-    })
+		});
+	
+	});    
 
 })
 .catch(function(err) {
-    // Crawling failed...
+    // Oops...
     console.error("err: " + err);
-    // callback(err, null);
 });
 
 
